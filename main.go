@@ -104,7 +104,6 @@ func getWeightedColorSumation(colorMatrix [][]float64) uint8 {
 func generateWeightMatrix(radius int, sigma float64) [][]float64 {
 	weights := newMatrix(radius, radius)
 	var summation float64 = 0.0
-	fmt.Println(len(weights))
 
 	for i := 0; i < len(weights); i++ {
 		for j := 0; j < len(weights[i]); j++ {
@@ -113,13 +112,14 @@ func generateWeightMatrix(radius int, sigma float64) [][]float64 {
 		}
 	}
 	normalizedSum := 0.0
+
+	// Not normalizing is the equivalent of applying two filters: gaussian blurring filter + brightness filter.
 	for i := 0; i < len(weights); i++ {
 		for j := 0; j < len(weights[i]); j++ {
 			weights[i][j] /= summation
 			normalizedSum += weights[i][j]
 		}
 	}
-	fmt.Println(normalizedSum)
 	return weights
 }
 
