@@ -9,13 +9,15 @@ import (
 	"log"
 	"math"
 	"os"
+	"sync"
+	"time"
 )
 
 func main() {
 	image.RegisterFormat("jpeg", "jpeg", jpeg.Decode, jpeg.DecodeConfig)
 	imageName := "2"
-	radius := 1000
-	sigma := 500.0
+	radius := 101
+	sigma := 50.0
 	weightedMatrix := generateWeightMatrix(radius, sigma)
 	weightMatrixImage := drawWeightedMatrix(image.NewRGBA(image.Rect(0, 0, radius, radius)), weightedMatrix)
 	saveImage(weightMatrixImage, fmt.Sprintf("./weigh_matrix?r=%d&s=%d.png", radius, int(sigma)))
@@ -26,10 +28,17 @@ func main() {
 	}
 
 	fmt.Printf("Image height - %d\nImage width - %d\n", imageToBlur.Bounds().Dy(), imageToBlur.Bounds().Dx())
+	blurredImageP := blurImageParallel(imageToBlur.(*image.RGBA), weightedMatrix)
 
 	blurredImage := blurImage(imageToBlur.(*image.RGBA), weightedMatrix)
-	saveImage(blurredImage, fmt.Sprintf("./test_images/%s_result.png", imageName))
+	saveImage(blurredImageP, fmt.Sprintf("./test_images/%s_resultP?r=%d&s=%d.png", imageName, radius, int(sigma)))
+	saveImage(blurredImage, fmt.Sprintf("./test_images/%s_result?r=%d&s=%d.png", imageName, radius, int(sigma)))
 	return
+}
+
+func timeTrack(start time.Time, name string) {
+	elapsed := time.Since(start)
+	log.Printf("%s took %f", name, elapsed.Seconds())
 }
 
 func gaussianModel(x float64, y float64, sigma float64) float64 {
@@ -37,6 +46,7 @@ func gaussianModel(x float64, y float64, sigma float64) float64 {
 }
 
 func blurImage(image *image.RGBA, weightedMatrix [][]float64) *image.RGBA {
+	defer timeTrack(time.Now(), "blurLinear")
 	height := image.Bounds().Dy()
 	width := image.Bounds().Dx()
 	for x := 0; x < width; x++ {
@@ -91,6 +101,68 @@ func blurImage(image *image.RGBA, weightedMatrix [][]float64) *image.RGBA {
 	return image
 }
 
+func blurImageParallel(input *image.RGBA, weightedMatrix [][]float64) *image.RGBA {
+	defer timeTrack(time.Now(), "blurParallel")
+	var wg sync.WaitGroup
+	height := input.Bounds().Dy()
+	width := input.Bounds().Dx()
+	for x := 0; x < width; x++ {
+		for y := 0; y < height; y++ {
+			wg.Add(1)
+			go func(x int, y int, image *image.RGBA) {
+				defer wg.Done()
+				distrubutedColorRed := newMatrix(len(weightedMatrix), len(weightedMatrix))
+				distrubutedColorGreen := newMatrix(len(weightedMatrix), len(weightedMatrix))
+				distrubutedColorBlue := newMatrix(len(weightedMatrix), len(weightedMatrix))
+
+				for weightX := 0; weightX < len(weightedMatrix); weightX++ {
+					for weightY := 0; weightY < len(weightedMatrix[weightX]); weightY++ {
+
+						sampleX := x + weightX - (len(weightedMatrix) / 2)
+						sampleY := y + weightY - (len(weightedMatrix) / 2)
+
+						if sampleX > width-1 {
+							sampleX = (width - 1) - (sampleX - (width - 1))
+						}
+						if sampleY > height-1 {
+							sampleX = (height - 1) - (sampleY - (height - 1))
+						}
+
+						if sampleX < 0 {
+							sampleX = int(math.Abs(float64(sampleX)))
+						}
+
+						if sampleY < 0 {
+							sampleY = int(math.Abs(float64(sampleY)))
+						}
+
+						currentWeight := weightedMatrix[weightX][weightY]
+
+						pixelColor := image.RGBAAt(sampleX, sampleY)
+						distrubutedColorRed[weightX][weightY] = currentWeight * float64(pixelColor.R)
+						distrubutedColorGreen[weightX][weightY] = currentWeight * float64(pixelColor.G)
+						distrubutedColorBlue[weightX][weightY] = currentWeight * float64(pixelColor.B)
+
+					}
+				}
+				a := image.RGBAAt(x, y).A
+				summedR := getWeightedColorSumation(distrubutedColorRed)
+				summedG := getWeightedColorSumation(distrubutedColorGreen)
+				summedB := getWeightedColorSumation(distrubutedColorBlue)
+
+				image.SetRGBA(x, y, color.RGBA{
+					R: summedR,
+					G: summedG,
+					B: summedB,
+					A: a,
+				})
+			}(x, y, input)
+		}
+	}
+	wg.Wait()
+	return input
+}
+
 func getWeightedColorSumation(colorMatrix [][]float64) uint8 {
 	summation := 0.0
 	for i := 0; i < len(colorMatrix); i++ {
@@ -112,7 +184,7 @@ func generateWeightMatrix(radius int, sigma float64) [][]float64 {
 		}
 	}
 	normalizedSum := 0.0
-
+	println(summation)
 	// Not normalizing is the equivalent of applying two filters: gaussian blurring filter + brightness filter.
 	for i := 0; i < len(weights); i++ {
 		for j := 0; j < len(weights[i]); j++ {
@@ -120,6 +192,7 @@ func generateWeightMatrix(radius int, sigma float64) [][]float64 {
 			normalizedSum += weights[i][j]
 		}
 	}
+
 	return weights
 }
 
